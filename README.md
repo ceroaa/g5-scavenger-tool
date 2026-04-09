@@ -1,8 +1,8 @@
-# G5 Scavenger Tool
+ # OpenClearn
 
-A practical cleanup tool for AI-heavy workspaces that accumulate duplicate artifacts, stale logs, and endlessly appended workflow records.
+  OpenClearn — Open Workspace Scavenger for AI Agents.
 
-This standalone version is extracted from the Xiaoyu G5 pipeline and designed for reuse in other projects.
+  This standalone version is extracted from the Xiaoyu G5 pipeline and designed for reuse in other projects.
 
 ## Why It Exists
 
@@ -18,6 +18,7 @@ Over time this causes storage bloat and noisy state.
 ## Features
 
 - `dry-run` mode (no writes)
+- three cleanup modes: `safe`, `balanced`, `aggressive`
 - snapshot dedupe by `(line_id, capability_signature)`
 - low-activity stale `misc_line` cleanup
 - external specimen dedupe by `sample_id`
@@ -25,10 +26,14 @@ Over time this causes storage bloat and noisy state.
   - timeout
   - rollback cap per run
   - protected keywords (never rollback)
+- media duplicate scan (images/videos) by SHA256
+- optional duplicate media deletion
+- patrol mode for auto-cruise cleanup
 
 ## Files
 
 - `scavenger.py` - main script
+- `patrol.py` - auto-cruise scheduler
 - `config.example.json` - example config
 - `run_safe.bat` - safe dry-run launcher (Windows)
 
@@ -36,13 +41,25 @@ Over time this causes storage bloat and noisy state.
 
 ```powershell
 cd tools\g5_scavenger
-python scavenger.py --config config.example.json --dry-run
+python scavenger.py --config config.example.json --mode safe --dry-run
 ```
 
 Then apply:
 
 ```powershell
-python scavenger.py --config config.example.json
+python scavenger.py --config config.example.json --mode balanced
+```
+
+Aggressive (includes media duplicate deletion if enabled):
+
+```powershell
+python scavenger.py --config config.example.json --mode aggressive
+```
+
+Auto-cruise patrol (one cycle every 30 minutes, auto-apply above threshold):
+
+```powershell
+python patrol.py --config config.example.json --mode balanced --cycles 0 --interval-seconds 1800 --auto-apply --apply-threshold-mb 256
 ```
 
 ## Config
@@ -59,6 +76,14 @@ Example fields:
 - `trial_timeout_hours`
 - `max_rollbacks`
 - `protect_keywords`
+- `mode`
+- `media_cleanup`
+  - `enabled`
+  - `delete_duplicates`
+  - `keep_strategy` (`oldest` or `newest`)
+  - `min_size_kb`
+  - `roots`
+  - `extensions`
 
 All path fields are relative to `root`.
 
@@ -73,4 +98,3 @@ All path fields are relative to `root`.
 - `ai-workspace-scavenger`
 - `agent-state-scavenger`
 - `g5-scavenger-tool`
-
