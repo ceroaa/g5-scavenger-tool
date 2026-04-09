@@ -1,13 +1,51 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
 TZ = timezone(timedelta(hours=8))
+MODE_DEFAULTS = {
+    "safe": {
+        "stale_days": 14,
+        "trial_timeout_hours": 240,
+        "max_rollbacks": 20,
+        "media_enabled": False,
+        "media_delete_duplicates": False,
+    },
+    "balanced": {
+        "stale_days": 7,
+        "trial_timeout_hours": 168,
+        "max_rollbacks": 50,
+        "media_enabled": True,
+        "media_delete_duplicates": False,
+    },
+    "aggressive": {
+        "stale_days": 3,
+        "trial_timeout_hours": 96,
+        "max_rollbacks": 200,
+        "media_enabled": True,
+        "media_delete_duplicates": True,
+    },
+}
+DEFAULT_MEDIA_EXTENSIONS = [
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".gif",
+    ".bmp",
+    ".mp4",
+    ".mov",
+    ".avi",
+    ".mkv",
+    ".webm",
+]
 
 
 def now_dt() -> datetime:
@@ -45,6 +83,16 @@ def append_jsonl(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def estimate_json_rows_bytes(rows: list[dict]) -> int:
+    total = 0
+    for row in rows:
+        try:
+            total += len(json.dumps(row, ensure_ascii=False).encode("utf-8"))
+        except Exception:
+            continue
+    return total
 
 
 def choose_better_snapshot(a: dict, b: dict) -> dict:
@@ -120,6 +168,95 @@ def dedupe_external_samples(samples: list[dict]) -> tuple[list[dict], list[dict]
     return merged, removed
 
 
+def hash_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        while True:
+            block = fh.read(1024 * 1024)
+            if not block:
+                break
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def scan_media_duplicates(
+    roots: list[Path],
+    extensions: list[str],
+    min_size_bytes: int,
+    keep_strategy: str,
+) -> tuple[list[dict], int]:
+    ext_set = {e.lower() if e.startswith(".") else f".{e.lower()}" for e in extensions}
+    by_size: dict[int, list[Path]] = {}
+    for root in roots:
+        if not root.exists():
+            continue
+        for dirpath, _, filenames in os.walk(root):
+            for name in filenames:
+                p = Path(dirpath) / name
+                if p.suffix.lower() not in ext_set:
+                    continue
+                try:
+                    size = p.stat().st_size
+                except Exception:
+                    continue
+                if size < min_size_bytes:
+                    continue
+                by_size.setdefault(size, []).append(p)
+
+    groups: list[dict] = []
+    reclaimable = 0
+    for size, files in by_size.items():
+        if len(files) < 2:
+            continue
+        by_hash: dict[str, list[Path]] = {}
+        for p in files:
+            try:
+                h = hash_file(p)
+            except Exception:
+                continue
+            by_hash.setdefault(h, []).append(p)
+        for h, same in by_hash.items():
+            if len(same) < 2:
+                continue
+            ordered = sorted(same, key=lambda x: x.stat().st_mtime)
+            if keep_strategy == "newest":
+                ordered = list(reversed(ordered))
+            keep = ordered[0]
+            delete = ordered[1:]
+            reclaim = size * len(delete)
+            reclaimable += reclaim
+            groups.append(
+                {
+                    "hash": h,
+                    "size_bytes": size,
+                    "keep": str(keep),
+                    "delete": [str(x) for x in delete],
+                    "count": len(same),
+                    "reclaimable_bytes": reclaim,
+                }
+            )
+    groups.sort(key=lambda g: int(g.get("reclaimable_bytes", 0)), reverse=True)
+    return groups, reclaimable
+
+
+def delete_media_duplicates(groups: list[dict]) -> tuple[int, int]:
+    deleted_files = 0
+    deleted_bytes = 0
+    for g in groups:
+        size = int(g.get("size_bytes", 0))
+        for raw in g.get("delete", []):
+            p = Path(str(raw))
+            if not p.exists():
+                continue
+            try:
+                p.unlink()
+                deleted_files += 1
+                deleted_bytes += size
+            except Exception:
+                continue
+    return deleted_files, deleted_bytes
+
+
 def rollback_stale_trials_guarded(
     records: list[dict],
     trial_timeout_hours: int,
@@ -171,26 +308,68 @@ def rollback_stale_trials_guarded(
     return records, changed
 
 
+def pick_value(cli_value: int | None, mode_value: int, config_value: int | None) -> int:
+    if cli_value is not None:
+        return cli_value
+    if config_value is not None:
+        return config_value
+    return mode_value
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
+    parser.add_argument("--mode", choices=["safe", "balanced", "aggressive"], default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--stale-days", type=int, default=None)
     parser.add_argument("--trial-timeout-hours", type=int, default=None)
     parser.add_argument("--max-rollbacks", type=int, default=None)
+    parser.add_argument("--enable-media", action="store_true")
+    parser.add_argument("--no-media", action="store_true")
+    parser.add_argument("--delete-media-duplicates", action="store_true")
     args = parser.parse_args()
 
     config = load_json(Path(args.config), {})
+    mode = str(args.mode or config.get("mode", "safe")).lower()
+    if mode not in MODE_DEFAULTS:
+        raise SystemExit(f"Unsupported mode: {mode}")
+    mode_cfg = MODE_DEFAULTS[mode]
     root = Path(config.get("root", ".")).resolve()
 
-    stale_days = args.stale_days if args.stale_days is not None else int(config.get("stale_days", 7))
-    trial_timeout_hours = (
-        args.trial_timeout_hours
-        if args.trial_timeout_hours is not None
-        else int(config.get("trial_timeout_hours", 168))
+    stale_days = pick_value(
+        args.stale_days,
+        int(mode_cfg["stale_days"]),
+        int(config["stale_days"]) if "stale_days" in config else None,
     )
-    max_rollbacks = args.max_rollbacks if args.max_rollbacks is not None else int(config.get("max_rollbacks", 50))
+    trial_timeout_hours = pick_value(
+        args.trial_timeout_hours,
+        int(mode_cfg["trial_timeout_hours"]),
+        int(config["trial_timeout_hours"]) if "trial_timeout_hours" in config else None,
+    )
+    max_rollbacks = pick_value(
+        args.max_rollbacks,
+        int(mode_cfg["max_rollbacks"]),
+        int(config["max_rollbacks"]) if "max_rollbacks" in config else None,
+    )
     protect_keywords = list(config.get("protect_keywords", ["OPENSPACE-"]))
+
+    media_cfg = dict(config.get("media_cleanup", {}))
+    media_enabled = bool(media_cfg.get("enabled", mode_cfg["media_enabled"]))
+    media_delete = bool(media_cfg.get("delete_duplicates", mode_cfg["media_delete_duplicates"]))
+    if args.enable_media:
+        media_enabled = True
+    if args.no_media:
+        media_enabled = False
+    if args.delete_media_duplicates:
+        media_enabled = True
+        media_delete = True
+    media_keep = str(media_cfg.get("keep_strategy", "oldest")).lower()
+    if media_keep not in {"oldest", "newest"}:
+        media_keep = "oldest"
+    media_ext = list(media_cfg.get("extensions", DEFAULT_MEDIA_EXTENSIONS))
+    media_min_size_bytes = int(media_cfg.get("min_size_kb", 64)) * 1024
+    raw_roots = media_cfg.get("roots", ["scratch", "public", "frontend"])
+    media_roots = [root / str(r) if not str(r).startswith(("C:", "D:", "/")) else Path(str(r)) for r in raw_roots]
 
     snap_path = root / str(config["snapshot_file"])
     ext_path = root / str(config["external_specimen_file"])
@@ -216,6 +395,20 @@ def main() -> None:
         protect_keywords=protect_keywords,
     )
 
+    media_groups: list[dict] = []
+    media_reclaimable = 0
+    media_deleted_files = 0
+    media_deleted_bytes = 0
+    if media_enabled:
+        media_groups, media_reclaimable = scan_media_duplicates(
+            roots=media_roots,
+            extensions=media_ext,
+            min_size_bytes=media_min_size_bytes,
+            keep_strategy=media_keep,
+        )
+        if (not args.dry_run) and media_delete and media_groups:
+            media_deleted_files, media_deleted_bytes = delete_media_duplicates(media_groups)
+
     snap_payload["snapshots"] = snapshots_2
     snap_payload["updated_at"] = now_iso()
     ext_payload["samples"] = merged_samples
@@ -232,13 +425,35 @@ def main() -> None:
         "version": "v1",
         "updated_at": now_iso(),
         "status": "completed",
+        "mode": mode,
         "dry_run": args.dry_run,
         "metrics": {
             "removed_duplicate_snapshots": len(removed_dup_snap),
             "removed_misc_residue": len(removed_misc),
             "removed_duplicate_samples": len(removed_dup_samples),
             "rolled_back_stale_trials": len(rolled_back),
+            "media_duplicate_groups": len(media_groups),
+            "media_reclaimable_bytes": media_reclaimable,
+            "media_deleted_files": media_deleted_files,
+            "media_deleted_bytes": media_deleted_bytes,
+            "estimated_reclaim_bytes": (
+                estimate_json_rows_bytes(removed_dup_snap)
+                + estimate_json_rows_bytes(removed_misc)
+                + estimate_json_rows_bytes(removed_dup_samples)
+                + media_reclaimable
+            ),
         },
+        "settings": {
+            "stale_days": stale_days,
+            "trial_timeout_hours": trial_timeout_hours,
+            "max_rollbacks": max_rollbacks,
+            "protect_keywords": protect_keywords,
+            "media_enabled": media_enabled,
+            "media_delete_duplicates": media_delete,
+            "media_keep_strategy": media_keep,
+            "media_roots": [str(p) for p in media_roots],
+        },
+        "top_media_groups": media_groups[:20],
         "line_distribution_after": dict(Counter(s.get("line_id", "unknown") for s in snapshots_2)),
     }
     if not args.dry_run:

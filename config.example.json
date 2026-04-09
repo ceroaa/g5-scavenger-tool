@@ -1,5 +1,6 @@
 {
   "root": "C:/Users/Administrator/.openclaw/workspace/xiaoyu_tech_city",
+  "mode": "balanced",
   "snapshot_file": "state/g5_skill_snapshots.json",
   "external_specimen_file": "state/g5_external_specimens.json",
   "structure_adjustment_file": "protocols/g5_structure_adjustments.json",
@@ -10,5 +11,29 @@
   "max_rollbacks": 50,
   "protect_keywords": [
     "OPENSPACE-"
-  ]
+  ],
+  "media_cleanup": {
+    "enabled": true,
+    "delete_duplicates": false,
+    "keep_strategy": "oldest",
+    "min_size_kb": 64,
+    "roots": [
+      "scratch",
+      "public",
+      "frontend"
+    ],
+    "extensions": [
+      ".png",
+      ".jpg",
+      ".jpeg",
+      ".webp",
+      ".gif",
+      ".bmp",
+      ".mp4",
+      ".mov",
+      ".avi",
+      ".mkv",
+      ".webm"
+    ]
+  }
 }

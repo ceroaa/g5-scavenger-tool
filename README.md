@@ -92,9 +92,3 @@ All path fields are relative to `root`.
 - Start with `--dry-run`.
 - Keep `max_rollbacks` low (for example 20-50).
 - Use `protect_keywords` for critical experiments.
-
-## Suggested GitHub Repo Name
-
-- `ai-workspace-scavenger`
-- `agent-state-scavenger`
-- `g5-scavenger-tool`
