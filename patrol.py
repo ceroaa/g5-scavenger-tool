@@ -31,9 +31,9 @@ def append_jsonl(path: Path, payload: dict) -> None:
         fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
-def run_scavenger(base: Path, config_path: Path, mode: str, dry_run: bool) -> tuple[int, dict]:
+def run_scavenger(base: Path, config_path: Path, mode: str, operation: str, dry_run: bool) -> tuple[int, dict]:
     script = (base / "scavenger.py").resolve()
-    cmd = [sys.executable, str(script), "--config", str(config_path), "--mode", mode]
+    cmd = [sys.executable, str(script), "--config", str(config_path), "--mode", mode, "--operation", operation]
     if dry_run:
         cmd.append("--dry-run")
     cp = subprocess.run(
@@ -57,6 +57,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument("--mode", choices=["safe", "balanced", "aggressive"], default="balanced")
+    parser.add_argument("--operation", choices=["cleanup", "collect", "review"], default="cleanup")
     parser.add_argument("--interval-seconds", type=int, default=1800)
     parser.add_argument("--cycles", type=int, default=1, help="0 means run forever")
     parser.add_argument("--auto-apply", action="store_true")
@@ -77,14 +78,20 @@ def main() -> None:
     index = 0
     while True:
         index += 1
-        rc, dry = run_scavenger(base=base, config_path=config_path, mode=args.mode, dry_run=True)
+        rc, dry = run_scavenger(base=base, config_path=config_path, mode=args.mode, operation=args.operation, dry_run=True)
         metrics = dry.get("metrics", {}) if isinstance(dry, dict) else {}
         reclaim_mb = round(float(metrics.get("estimated_reclaim_bytes", 0)) / 1024 / 1024, 2)
         should_apply = bool(args.auto_apply and reclaim_mb >= float(args.apply_threshold_mb))
 
         applied = None
         if should_apply and rc == 0:
-            arc, applied_payload = run_scavenger(base=base, config_path=config_path, mode=args.mode, dry_run=False)
+            arc, applied_payload = run_scavenger(
+                base=base,
+                config_path=config_path,
+                mode=args.mode,
+                operation=args.operation,
+                dry_run=False,
+            )
             applied = {"returncode": arc, "payload": applied_payload}
 
         event = {
@@ -92,6 +99,7 @@ def main() -> None:
             "runner": "patrol.py",
             "cycle_index": index,
             "mode": args.mode,
+            "operation": args.operation,
             "dry_run_returncode": rc,
             "estimated_reclaim_mb": reclaim_mb,
             "auto_apply": args.auto_apply,

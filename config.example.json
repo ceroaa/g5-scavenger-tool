@@ -6,6 +6,10 @@
   "structure_adjustment_file": "protocols/g5_structure_adjustments.json",
   "state_file": "state/g5_scavenger_state.json",
   "report_jsonl": "audit/g5_scavenger_reports.jsonl",
+  "llm_binding": {
+    "provider": "openai",
+    "api_key_env": "OPENAI_API_KEY"
+  },
   "stale_days": 7,
   "trial_timeout_hours": 168,
   "max_rollbacks": 50,
@@ -34,6 +38,60 @@
       ".avi",
       ".mkv",
       ".webm"
+    ]
+  },
+  "collector_context": {
+    "persona": "city_sanitation_guard",
+    "principles": [
+      "collect_first",
+      "review_before_delete",
+      "protect_core_memory"
+    ],
+    "allow_roots": [
+      "scratch",
+      "audit",
+      "state",
+      "public"
+    ],
+    "deny_roots": [
+      ".git",
+      "protocols",
+      "residents",
+      "memory_store"
+    ],
+    "deny_patterns": [
+      "*.key",
+      "*.pem",
+      "*.env",
+      "*anchor*",
+      "*identity*"
+    ],
+    "protected_files": []
+  },
+  "collector": {
+    "candidate_file": "state/g5_scavenger_candidates.json",
+    "review_markdown": "audit/g5_scavenger_review.md",
+    "approve_file": "state/g5_scavenger_approve.json",
+    "use_trash": true,
+    "trash_dir": "trash/openclearn",
+    "stale_days": 21,
+    "roots": [
+      "scratch",
+      "audit",
+      "state",
+      "public"
+    ],
+    "include_patterns": [
+      "*.tmp",
+      "*.temp",
+      "*.bak",
+      "*.old",
+      "*.log",
+      "*.cache"
+    ],
+    "exclude_patterns": [
+      "state/*.json",
+      "state/*.jsonl"
     ]
   }
 }
