@@ -9,10 +9,27 @@ import shutil
 import uuid
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from importlib import metadata
 from pathlib import Path
 
 
 TZ = timezone(timedelta(hours=8))
+TOOL_NAME = "OpenClearn"
+VERSION_FILE = Path(__file__).resolve().parent / "VERSION"
+
+
+def read_tool_version() -> str:
+    try:
+        return VERSION_FILE.read_text(encoding="utf-8").strip() or "v0.0.0"
+    except Exception:
+        pass
+    try:
+        return f"v{metadata.version('openclearn')}"
+    except Exception:
+        return "v0.0.0"
+
+
+TOOL_VERSION = read_tool_version()
 MODE_DEFAULTS = {
     "safe": {
         "stale_days": 14,
@@ -73,6 +90,54 @@ DEFAULT_DOC_EXTENSIONS = [
     ".xlsx",
     ".pptx",
 ]
+DEFAULT_CONFIG = {
+    "root": ".",
+    "mode": "safe",
+    "snapshot_file": "state/g5_skill_snapshots.json",
+    "external_specimen_file": "state/g5_external_specimens.json",
+    "structure_adjustment_file": "protocols/g5_structure_adjustments.json",
+    "state_file": "state/g5_scavenger_state.json",
+    "report_jsonl": "audit/g5_scavenger_reports.jsonl",
+    "stale_days": 14,
+    "trial_timeout_hours": 240,
+    "max_rollbacks": 20,
+    "protect_keywords": ["OPENSPACE-", "DO_NOT_TOUCH"],
+    "media_cleanup": {
+        "enabled": False,
+        "delete_duplicates": False,
+        "keep_strategy": "oldest",
+        "min_size_kb": 64,
+        "roots": ["scratch", "public"],
+        "extensions": DEFAULT_MEDIA_EXTENSIONS,
+    },
+    "collector_context": {
+        "persona": "careful_cleaner",
+        "principles": ["collect_first", "review_before_delete", "protect_core_memory"],
+        "allow_roots": ["scratch", "audit", "state", "public"],
+        "deny_roots": [".git", "protocols", "residents", "memory_store"],
+        "deny_patterns": ["*.key", "*.pem", "*.env", "*anchor*", "*identity*"],
+        "protected_files": [],
+    },
+    "collector": {
+        "candidate_file": "state/g5_scavenger_candidates.json",
+        "review_markdown": "audit/g5_scavenger_review.md",
+        "approve_file": "state/g5_scavenger_approve.json",
+        "use_trash": True,
+        "trash_dir": "trash/openclearn",
+        "stale_days": 21,
+        "roots": ["scratch", "audit", "state", "public"],
+        "include_patterns": DEFAULT_COLLECTOR_PATTERNS,
+        "exclude_patterns": ["state/*.json", "state/*.jsonl"],
+    },
+    "doc_cleanup": {
+        "enabled": False,
+        "roots": [],
+        "extensions": DEFAULT_DOC_EXTENSIONS,
+        "min_size_kb": 1,
+        "max_hash_mb": 32,
+        "max_text_scan_kb": 256,
+    },
+}
 BUILTIN_AGENT_PROFILES = {
     "codex": {
         "persona": "pragmatic_cleaner",
@@ -123,10 +188,119 @@ def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def write_default_config(path: Path) -> dict:
+    if path.exists():
+        return {
+            "tool": TOOL_NAME,
+            "version": TOOL_VERSION,
+            "operation": "init_config",
+            "status": "skipped_exists",
+            "path": str(path.resolve()),
+        }
+    payload = dict(DEFAULT_CONFIG)
+    payload["root"] = str(Path.cwd().resolve())
+    write_json(path, payload)
+    return {
+        "tool": TOOL_NAME,
+        "version": TOOL_VERSION,
+        "operation": "init_config",
+        "status": "created",
+        "path": str(path.resolve()),
+    }
+
+
 def append_jsonl(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def file_state(path: Path) -> dict:
+    return {
+        "path": str(path),
+        "exists": path.exists(),
+        "is_file": path.is_file(),
+        "is_dir": path.is_dir(),
+    }
+
+
+def run_doctor(config_path: Path, config: dict, root: Path, mode: str, collector_context: dict, agent_profile: dict) -> dict:
+    checks: list[dict] = []
+    warnings: list[str] = []
+    errors: list[str] = []
+
+    def check(name: str, ok: bool, detail: str) -> None:
+        checks.append({"name": name, "ok": bool(ok), "detail": detail})
+        if not ok:
+            errors.append(f"{name}: {detail}")
+
+    check("config_file", config_path.exists(), str(config_path))
+    check("root_exists", root.exists(), str(root))
+
+    required_keys = [
+        "snapshot_file",
+        "external_specimen_file",
+        "structure_adjustment_file",
+        "state_file",
+        "report_jsonl",
+    ]
+    missing = [key for key in required_keys if key not in config]
+    check("required_config_keys", not missing, ",".join(missing) if missing else "ok")
+
+    if mode not in MODE_DEFAULTS:
+        check("mode", False, f"unsupported:{mode}")
+    else:
+        check("mode", True, mode)
+
+    collector_cfg = dict(config.get("collector", {}))
+    candidate_file = resolve_path(root, str(collector_cfg.get("candidate_file", "state/g5_scavenger_candidates.json")))
+    review_markdown = resolve_path(root, str(collector_cfg.get("review_markdown", "audit/g5_scavenger_review.md")))
+    approve_file = resolve_path(root, str(collector_cfg.get("approve_file", "state/g5_scavenger_approve.json")))
+    trash_dir = resolve_path(root, str(collector_cfg.get("trash_dir", "trash/openclearn")))
+    for path_name, path in {
+        "candidate_parent": candidate_file.parent,
+        "review_parent": review_markdown.parent,
+        "approve_parent": approve_file.parent,
+        "trash_parent": trash_dir.parent,
+    }.items():
+        check(path_name, path.exists() or path.parent.exists(), str(path))
+
+    if not bool(collector_cfg.get("use_trash", True)):
+        warnings.append("collector.use_trash is false; delete mode becomes less recoverable")
+
+    allow_roots = list(collector_context.get("allow_roots", []))
+    deny_roots = list(collector_context.get("deny_roots", []))
+    if not allow_roots:
+        warnings.append("collector_context.allow_roots is empty; scanner scope is broad")
+    for allow_root in allow_roots:
+        if not Path(allow_root).exists():
+            warnings.append(f"allow_root_missing:{allow_root}")
+    for deny_root in deny_roots:
+        if Path(deny_root).exists() and any(is_subpath(Path(deny_root), Path(ar)) for ar in allow_roots):
+            warnings.append(f"deny_root_inside_allow_root:{deny_root}")
+
+    doc_cfg = dict(config.get("doc_cleanup", {}))
+    if bool(doc_cfg.get("enabled", False)):
+        for raw in doc_cfg.get("roots", []):
+            p = resolve_path(root, str(raw))
+            if not p.exists():
+                warnings.append(f"doc_root_missing:{p}")
+
+    report = {
+        "tool": TOOL_NAME,
+        "version": TOOL_VERSION,
+        "generated_at": now_iso(),
+        "operation": "doctor",
+        "status": "ok" if not errors else "error",
+        "config": file_state(config_path),
+        "root": file_state(root),
+        "mode": mode,
+        "agent_persona": str(agent_profile.get("persona", "cleaner")),
+        "checks": checks,
+        "warnings": warnings,
+        "errors": errors,
+    }
+    return report
 
 
 def estimate_json_rows_bytes(rows: list[dict]) -> int:
@@ -799,7 +973,7 @@ def build_cleanup_state(
     persona: str,
 ) -> dict:
     return {
-        "version": "v1.5",
+        "version": TOOL_VERSION,
         "updated_at": now_iso(),
         "status": "completed",
         "operation": "cleanup",
@@ -841,9 +1015,11 @@ def build_cleanup_state(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True)
+    parser.add_argument("--version", action="version", version=f"{TOOL_NAME} {TOOL_VERSION}")
+    parser.add_argument("--config", default="openclearn.config.json")
+    parser.add_argument("--init-config", metavar="PATH", default=None)
     parser.add_argument("--mode", choices=["safe", "balanced", "aggressive"], default=None)
-    parser.add_argument("--operation", choices=["cleanup", "collect", "review", "delete"], default="cleanup")
+    parser.add_argument("--operation", choices=["cleanup", "collect", "review", "delete", "doctor"], default="cleanup")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--stale-days", type=int, default=None)
     parser.add_argument("--trial-timeout-hours", type=int, default=None)
@@ -859,7 +1035,15 @@ def main() -> None:
     parser.add_argument("--hard-delete", action="store_true")
     args = parser.parse_args()
 
-    config = load_json(Path(args.config), {})
+    if args.init_config:
+        print(json.dumps(write_default_config(Path(args.init_config)), ensure_ascii=False))
+        return
+
+    config_path = Path(args.config)
+    if not config_path.exists() and args.operation != "doctor":
+        raise SystemExit(f"Config not found: {config_path}. Create one with: openclearn --init-config {config_path}")
+
+    config = load_json(config_path, {})
     mode = str(args.mode or config.get("mode", "safe")).lower()
     if mode not in MODE_DEFAULTS:
         raise SystemExit(f"Unsupported mode: {mode}")
@@ -908,12 +1092,6 @@ def main() -> None:
     raw_roots = media_cfg.get("roots", ["scratch", "public", "frontend"])
     media_roots = [resolve_path(root, str(r)) for r in raw_roots]
 
-    snap_path = root / str(config["snapshot_file"])
-    ext_path = root / str(config["external_specimen_file"])
-    adjust_path = root / str(config["structure_adjustment_file"])
-    state_path = root / str(config["state_file"])
-    report_path = root / str(config["report_jsonl"])
-
     collector_cfg = dict(config.get("collector", {}))
     candidates_file = resolve_path(root, str(collector_cfg.get("candidate_file", "state/g5_scavenger_candidates.json")))
     review_md = resolve_path(root, str(collector_cfg.get("review_markdown", "audit/g5_scavenger_review.md")))
@@ -923,6 +1101,24 @@ def main() -> None:
     trash_dir = resolve_path(root, str(collector_cfg.get("trash_dir", "trash/openclearn")))
     exclude_patterns = list(collector_cfg.get("exclude_patterns", []))
     exclude_patterns.extend([str(x) for x in agent_profile.get("collector_exclude_patterns", []) if str(x)])
+
+    if args.operation == "doctor":
+        state = run_doctor(
+            config_path=config_path.resolve(),
+            config=config,
+            root=root,
+            mode=mode,
+            collector_context=collector_context,
+            agent_profile=agent_profile,
+        )
+        print(json.dumps(state, ensure_ascii=False))
+        return
+
+    snap_path = root / str(config["snapshot_file"])
+    ext_path = root / str(config["external_specimen_file"])
+    adjust_path = root / str(config["structure_adjustment_file"])
+    state_path = root / str(config["state_file"])
+    report_path = root / str(config["report_jsonl"])
 
     # collector/review/delete pipeline
     if args.operation in {"collect", "review", "delete"}:
@@ -948,7 +1144,7 @@ def main() -> None:
         all_candidates.sort(key=lambda x: int(x.get("size_bytes", 0)), reverse=True)
         estimated_reclaim = sum(int(c.get("size_bytes", 0)) for c in all_candidates)
         bundle = {
-            "version": "v1.5",
+            "version": TOOL_VERSION,
             "generated_at": now_iso(),
             "operation": args.operation,
             "root": str(root),
@@ -1005,7 +1201,7 @@ def main() -> None:
             write_json(candidates_file, bundle)
 
         state = {
-            "version": "v1.5",
+            "version": TOOL_VERSION,
             "updated_at": now_iso(),
             "status": "completed",
             "operation": args.operation,

@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openclearn"
+version = "1.7.0"
+description = "Safe, configurable cleanup tooling for AI agent workspaces."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "OpenClearn Contributors" }
+]
+keywords = ["cleanup", "agent", "openclaw", "codex", "workspace"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Environment :: Console",
+  "Operating System :: OS Independent",
+  "Topic :: System :: Systems Administration",
+  "Topic :: Utilities"
+]
+
+[project.urls]
+Homepage = "https://github.com/ceroaa/OpenClearn"
+Repository = "https://github.com/ceroaa/OpenClearn"
+Issues = "https://github.com/ceroaa/OpenClearn/issues"
+
+[project.scripts]
+openclearn = "scavenger:main"
+openclearn-system-scan = "system_scan:main"
+openclearn-chrome-cache-clean = "clean_chrome_ai_cache:main"
+
+[tool.setuptools]
+py-modules = ["scavenger", "system_scan", "clean_chrome_ai_cache", "patrol"]

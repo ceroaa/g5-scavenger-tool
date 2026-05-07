@@ -2,8 +2,33 @@
 
 Safe, configurable cleanup tooling for AI agent workspaces (Codex / Claude Code / OpenClaw).
 
-## What Is New In v1.5
+## Install
 
+Install from GitHub with `pipx`:
+
+```powershell
+pipx install git+https://github.com/ceroaa/OpenClearn.git
+openclearn --version
+openclearn --init-config openclearn.config.json
+openclearn --config openclearn.config.json --operation doctor
+```
+
+Install in a Python environment:
+
+```powershell
+python -m pip install git+https://github.com/ceroaa/OpenClearn.git
+openclearn --version
+```
+
+## What Is New In v1.7
+
+- installable command-line package via `pipx` / `pip`.
+- `openclearn`: main cleanup command.
+- `openclearn-system-scan`: system disk growth scan.
+- `openclearn-chrome-cache-clean`: Chrome local AI cache cleanup helper.
+- `--init-config PATH`: create a starter config after install.
+- `--version`: print the installed OpenClearn version.
+- `doctor` mode: read-only health check for config, root paths, approval file paths, trash safety, allow roots, and document scan roots.
 - `collect` mode: collect cleanup candidates only, no deletion.
 - `review` mode: collect candidates and write a Markdown review report.
 - `delete` mode: delete only approved candidates from an approval file.
@@ -32,6 +57,14 @@ Safe, configurable cleanup tooling for AI agent workspaces (Codex / Claude Code 
 ```powershell
 cd tools\g5_scavenger
 python scavenger.py --config config.example.json --mode safe --operation collect
+```
+
+Read-only tool check:
+
+```powershell
+python scavenger.py --version
+python scavenger.py --init-config openclearn.config.json
+python scavenger.py --config config.example.json --operation doctor
 ```
 
 System-level growth scan (last 24h):
@@ -106,7 +139,7 @@ python scavenger.py --config config.example.json --provider openai --api-key-env
 
 Current v1.3 keeps provider/key-loaded status in reports and adds a documented lockfile resolution playbook from production use.
 
-v1.5 adds desktop/documents oriented document cleanup signals so G5 can ingest cleanup strategy and quality gates as reusable operational patterns.
+v1.7 adds installable CLI commands and starter config generation so OpenClearn can be used like a standalone external tool.
 
 ## Case Notes
 

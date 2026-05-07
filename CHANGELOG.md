@@ -2,6 +2,18 @@
 
 All notable changes to OpenClearn are documented in this file.
 
+## v1.7.0 - 2026-05-07
+
+- feat: add Python packaging metadata for `pipx` / `pip` installs.
+- feat: expose console commands: `openclearn`, `openclearn-system-scan`, and `openclearn-chrome-cache-clean`.
+- feat: add `--init-config PATH` to create a starter config after installation.
+
+## v1.6.0 - 2026-05-07
+
+- feat: add `--version` output backed by the local `VERSION` file.
+- feat: add `doctor` operation for read-only config, root, approval, trash, allow-root, and doc-root checks.
+- chore: use one shared tool version in reports instead of hardcoded report versions.
+
 ## v1.5.0 - 2026-04-20
 
 - feat: add `doc_cleanup` scanner in collect/review/delete pipeline.
